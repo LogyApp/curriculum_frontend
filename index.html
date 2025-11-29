@@ -2789,7 +2789,6 @@
       }
     }
 
-    // Submit final - MODIFICA ESTA FUNCIÓN
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
 
@@ -2876,6 +2875,7 @@
         const timeoutMs = 30000;
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+        // 1. PRIMERO registrar la hoja de vida y obtener el PDF
         const resp = await fetch("https://curriculum-backend-594761951101.europe-west1.run.app/api/hv/registrar", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2888,49 +2888,62 @@
         const result = await resp.json();
 
         if (resp.ok && result.ok) {
-          // ✅ ÉXITO: Primero actualizar la URL del PDF en el formulario
-          if (result.pdf_url) {
-            actualizarUrlPdfEnFormulario(result.pdf_url);
-            console.log("PDF generado y URL almacenada:", result.pdf_url);
-          } else {
-            console.warn("No se recibió URL del PDF en la respuesta");
+          // ✅ ÉXITO: Verificar que tenemos la URL del PDF
+          if (!result.pdf_url) {
+            throw new Error("No se recibió URL del PDF en la respuesta del registro");
           }
 
-          // ✅ Luego enviar el correo
-          try {
-            const datosCorreo = prepararDatosCorreo();
+          console.log("✅ Hoja de vida registrada. PDF URL:", result.pdf_url);
 
-            // Usar la URL del PDF recibida del backend
-            if (result.pdf_url) {
-              datosCorreo.pdf_url = result.pdf_url;
-            }
+          // 2. LUEGO enviar el correo con la URL del PDF
+          try {
+            const datosCorreo = {
+              nombre: [
+                data.primer_nombre,
+                data.segundo_nombre,
+                data.primer_apellido,
+                data.segundo_apellido
+              ].filter(Boolean).join(" "),
+              identificacion: data.identificacion,
+              correo: data.correo_electronico,
+              telefono: data.telefono,
+              pdf_url: result.pdf_url, // ← USAR LA URL DEL PDF QUE VIENE DEL REGISTRO
+              timestamp: new Date().toISOString()
+            };
+
+            console.log("📧 Enviando correo con datos:", datosCorreo);
 
             await enviarCorreoAspirante(datosCorreo);
-            console.log('Correo enviado exitosamente con PDF:', datosCorreo.pdf_url);
+            console.log('✅ Correo enviado exitosamente con PDF:', result.pdf_url);
+
+            alert("✔ Hoja de vida registrada correctamente.\nID: " + result.id_aspirante +
+              "\nSe ha generado el PDF y enviado por correo.");
+
           } catch (emailError) {
-            console.warn('No se pudo enviar el correo:', emailError);
-            // No bloqueamos el flujo si falla el correo
+            console.error('❌ Error enviando correo:', emailError);
+            // Aún mostramos éxito en el registro, pero avisamos del problema con el correo
+            alert("✔ Hoja de vida registrada correctamente.\nID: " + result.id_aspirante +
+              "\n⚠ No se pudo enviar el correo automático: " + emailError.message);
           }
 
-          alert("✔ Hoja de vida registrada correctamente.\nID: " + result.id_aspirante +
-            (result.pdf_url ? "\nSe ha generado el PDF y enviado por correo." : "\nPDF no generado."));
-
-          // Resetear formulario
+          // 3. FINALMENTE resetear formulario
           if (typeof resetFormToInitialState === "function") {
             resetFormToInitialState();
           } else {
             location.reload();
           }
+
         } else {
           const msg = result.error || "Ocurrió un error guardando la hoja de vida.";
           alert("⚠ " + msg);
         }
+
       } catch (err) {
         console.error("Error en submit HV:", err);
         if (err.name === "AbortError") {
           alert("⚠ Tiempo de espera agotado (30s). Intenta nuevamente.");
         } else {
-          alert("⚠ Error de conexión con el servidor.");
+          alert("⚠ Error: " + err.message);
         }
       } finally {
         form.dataset.submitting = "0";
