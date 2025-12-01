@@ -2789,21 +2789,43 @@
       }
     }
 
-    // Reemplazar el EVENTO SUBMIT COMPLETO con esta versión
+    // REEMPLAZA TODO EL EVENTO SUBMIT ACTUAL con esta versión simplificada:
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
 
+      // Evitar doble submit
       if (form.dataset.submitting === "1") return;
       form.dataset.submitting = "1";
 
       const originalSubmitHtml = btnSubmit.innerHTML;
       btnSubmit.disabled = true;
-      btnNext.disabled = true;
-      btnPrev.disabled = true;
-      btnSubmit.innerHTML = "Enviando... <span style='font-size:0.8em;opacity:0.8;'>(puede tomar unos segundos)</span>";
+      btnSubmit.innerHTML = "Enviando...";
 
       try {
-        // Preparar payload (tu código existente)
+        // 1. PRIMERO PRUEBA SIMPLE DE PDF
+        console.log("🧪 Probando generación de PDF simple...");
+
+        const testResponse = await fetch('/api/test/pdf-simple', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            identificacion: 'test_' + Date.now(),
+            nombre: 'Prueba Automática'
+          })
+        });
+
+        const testResult = await testResponse.json();
+        console.log("📊 Resultado prueba PDF:", testResult);
+
+        if (!testResult.success) {
+          throw new Error("La prueba de PDF falló: " + testResult.error);
+        }
+
+        alert("✅ ¡Prueba exitosa! El PDF se generó y subió correctamente.\n\n" +
+          "Ahora enviaremos tu hoja de vida completa...");
+
+        // 2. PREPARAR DATOS COMPLETOS
+        console.log("📤 Preparando datos completos...");
         const formData = new FormData(form);
         const data = {};
         formData.forEach((value, key) => {
@@ -2814,6 +2836,7 @@
         data.experiencia_laboral = recopilarExp();
         data.familiares = recopilarFamiliares();
 
+        // Referencias
         data.referencias = [
           {
             tipo_referencia: "laboral",
@@ -2838,6 +2861,7 @@
           }
         ];
 
+        // Contacto emergencia
         data.contacto_emergencia = {
           nombre_completo: emer_nombre.value.trim(),
           parentesco: emer_parentesco.value.trim(),
@@ -2846,12 +2870,14 @@
           direccion: emer_direccion.value.trim()
         };
 
+        // Metas
         data.metas_personales = {
           corto_plazo: meta_corto.value.trim(),
           mediano_plazo: meta_mediano.value.trim(),
           largo_plazo: meta_largo.value.trim(),
         };
 
+        // Seguridad
         data.seguridad = {
           llamados_atencion: seg_llamados.value,
           detalle_llamados: seg_detalle_llamados ? seg_detalle_llamados.value.trim() : "",
@@ -2872,164 +2898,82 @@
           resolucion_problemas: seg_resolucion.value.trim()
         };
 
+        // Agregar foto si existe
+        const fotoHidden = document.getElementById("hidden_foto_public_url");
+        if (fotoHidden && fotoHidden.value) {
+          data.foto_public_url = fotoHidden.value;
+          data.foto_gcs_path = document.getElementById("hidden_foto_gcs_path")?.value || "";
+        }
+
         console.log("📤 Enviando datos al servidor...");
-        console.log("📊 Campos principales:", Object.keys(data));
-        console.log("📊 Educación:", data.educacion.length, "registros");
-        console.log("📊 Experiencia:", data.experiencia_laboral.length, "registros");
-        console.log("📊 Familiares:", data.familiares.length, "registros");
 
+        // 3. ENVIAR DATOS COMPLETOS (con timeout más largo)
         const controller = new AbortController();
-        const timeoutMs = 60000; // 60 segundos para dar tiempo a la generación del PDF
-        const timeout = setTimeout(() => {
-          console.warn("⚠️ Timeout de 60 segundos alcanzado");
-          controller.abort();
-        }, timeoutMs);
+        const timeout = setTimeout(() => controller.abort(), 90000); // 90 segundos
 
-        // 1. PRIMERO registrar la hoja de vida y obtener el PDF
-        let pdfUrl = null;
-        try {
-          const resp = await fetch("https://curriculum-backend-594761951101.europe-west1.run.app/api/hv/registrar", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(data),
-            signal: controller.signal
-          });
+        const response = await fetch("https://curriculum-backend-594761951101.europe-west1.run.app/api/hv/registrar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+          signal: controller.signal
+        });
 
-          clearTimeout(timeout);
+        clearTimeout(timeout);
 
-          if (!resp.ok) {
-            const errorText = await resp.text();
-            console.error("❌ Error HTTP:", resp.status, errorText);
-            throw new Error(`Error del servidor: ${resp.status} - ${errorText.substring(0, 100)}`);
-          }
-
-          const result = await resp.json();
-          console.log("📥 Respuesta del servidor:", result);
-
-          // VERIFICAR ESTRUCTURA DE RESPUESTA CORRECTAMENTE
-          if (!result || typeof result !== 'object') {
-            throw new Error("Respuesta inválida del servidor");
-          }
-
-          if (result.success === false) {
-            throw new Error(result.error || "Error registrando hoja de vida");
-          }
-
-          // IMPORTANTE: El backend devuelve 'ok' no 'success' según tu código anterior
-          if (result.ok === false) {
-            throw new Error(result.error || "Error registrando hoja de vida");
-          }
-
-          // Obtener la URL del PDF (puede ser null si falló la generación)
-          pdfUrl = result.pdf_url || null;
-
-          console.log("✅ Hoja de vida registrada. PDF URL:", pdfUrl);
-          console.log("🔍 Respuesta completa:", result);
-
-          if (!pdfUrl) {
-            console.warn("⚠️ El servidor no devolvió URL del PDF. Puede que la generación haya fallado.");
-            // Continuamos sin PDF pero informamos al usuario
-          }
-
-        } catch (fetchError) {
-          clearTimeout(timeout);
-          console.error("❌ Error en fetch /api/hv/registrar:", fetchError);
-
-          if (fetchError.name === "AbortError") {
-            throw new Error("Tiempo de espera agotado (60s). La generación del PDF puede estar tomando más tiempo del esperado.");
-          } else if (fetchError.message.includes("Failed to fetch")) {
-            throw new Error("No se pudo conectar con el servidor. Verifica tu conexión a internet.");
-          } else {
-            throw fetchError;
-          }
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Error del servidor: ${response.status} - ${errorText.substring(0, 100)}`);
         }
 
-        // 2. ENVIAR CORREO SOLO SI TENEMOS PDF
-        if (pdfUrl) {
-          try {
-            const datosCorreo = {
-              nombre: [
-                data.primer_nombre,
-                data.segundo_nombre,
-                data.primer_apellido,
-                data.segundo_apellido
-              ].filter(Boolean).join(" "),
-              identificacion: data.identificacion,
-              correo: data.correo_electronico,
-              telefono: data.telefono,
-              pdf_url: pdfUrl,
-              timestamp: new Date().toISOString()
-            };
+        const result = await response.json();
+        console.log("📥 Respuesta del servidor:", result);
 
-            console.log("📧 Preparando envío de correo con PDF:", pdfUrl);
-
-            // Enviar correo con timeout más corto
-            const emailController = new AbortController();
-            const emailTimeout = setTimeout(() => emailController.abort(), 15000);
-
-            try {
-              await fetch('https://curriculum-backend-594761951101.europe-west1.run.app/api/correo/aspirante', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(datosCorreo),
-                signal: emailController.signal
-              });
-
-              clearTimeout(emailTimeout);
-              console.log('✅ Correo enviado exitosamente con PDF:', pdfUrl);
-
-            } catch (emailError) {
-              clearTimeout(emailTimeout);
-              console.warn('⚠️ Error enviando correo (pero datos guardados):', emailError);
-            }
-
-          } catch (emailError) {
-            console.warn('⚠️ Error preparando envío de correo:', emailError);
-            // Continuamos aunque falle el correo
-          }
+        // 4. VERIFICAR RESULTADO
+        if (!result.ok && result.success !== true) {
+          throw new Error(result.error || "Error registrando hoja de vida");
         }
 
-        // 3. MOSTRAR RESULTADO AL USUARIO
-        if (pdfUrl) {
-          alert("✅ ¡Hoja de vida registrada exitosamente!\n\n" +
-            "📄 Se ha generado tu PDF y se ha enviado una copia a tu correo.\n" +
-            "🔗 Puedes acceder a tu PDF aquí: " + pdfUrl);
+        // 5. MOSTRAR RESULTADO AL USUARIO
+        let alertMessage = "✅ ¡Hoja de vida registrada exitosamente!\n\n";
+
+        if (result.pdf_url) {
+          alertMessage += `📄 Se ha generado tu PDF.\n`;
+          alertMessage += `🔗 Puedes acceder aquí: ${result.pdf_url}\n\n`;
+          alertMessage += `📧 Se enviará una copia a tu correo.`;
+
+          // Abrir PDF en nueva pestaña
+          setTimeout(() => window.open(result.pdf_url, '_blank'), 500);
         } else {
-          alert("✅ ¡Datos guardados correctamente!\n\n" +
-            "⚠️ Sin embargo, no se pudo generar el PDF automáticamente.\n" +
-            "📧 Te contactaremos pronto para completar el proceso.\n\n" +
-            "📞 Si necesitas ayuda, contacta a Recursos Humanos.");
+          alertMessage += `⚠️ Los datos se guardaron pero no se pudo generar el PDF.\n`;
+          alertMessage += `📞 Te contactaremos pronto para completar el proceso.`;
         }
 
-        // 4. RESETEAR FORMULARIO
+        alert(alertMessage);
+
+        // 6. RESETEAR FORMULARIO
         console.log("🔄 Reseteando formulario...");
         if (typeof resetFormToInitialState === "function") {
           resetFormToInitialState();
         } else {
-          location.reload();
+          // Fallback: recargar página
+          setTimeout(() => location.reload(), 2000);
         }
 
-      } catch (err) {
-        console.error("❌ Error en submit HV:", err);
+      } catch (error) {
+        console.error("❌ Error en submit HV:", error);
 
         let errorMessage = "Ocurrió un error: ";
 
-        if (err.name === "AbortError") {
-          errorMessage = "⚠️ Tiempo de espera agotado (60s).\n\n" +
-            "Esto puede ocurrir si:\n" +
-            "• La generación del PDF está tomando más tiempo\n" +
-            "• Hay problemas de conexión\n\n" +
+        if (error.name === "AbortError") {
+          errorMessage = "⚠️ Tiempo de espera agotado (90s).\n\n" +
+            "El servidor está tomando mucho tiempo.\n" +
             "Tus datos podrían haberse guardado parcialmente.\n" +
             "Por favor contacta a Recursos Humanos para verificar.";
-        } else if (err.message.includes("No se recibió URL del PDF")) {
-          errorMessage = "⚠️ Los datos se guardaron pero no se pudo generar el PDF.\n\n" +
-            "Esto puede deberse a:\n" +
-            "• Problemas técnicos temporales\n" +
-            "• Limitaciones del sistema\n\n" +
-            "📧 Te contactaremos pronto para completar el proceso.\n" +
-            "📞 Contacta a Recursos Humanos si necesitas ayuda inmediata.";
+        } else if (error.message.includes("Failed to fetch")) {
+          errorMessage = "❌ No se pudo conectar con el servidor.\n\n" +
+            "Verifica tu conexión a internet e intenta nuevamente.";
         } else {
-          errorMessage += err.message;
+          errorMessage += error.message;
         }
 
         alert(errorMessage);
@@ -3037,9 +2981,7 @@
       } finally {
         form.dataset.submitting = "0";
         btnSubmit.disabled = false;
-        btnNext.disabled = false;
-        btnPrev.disabled = currentStep === 0;
-        btnSubmit.innerHTML = "Enviar hoja de vida ✅";
+        btnSubmit.innerHTML = originalSubmitHtml;
       }
     });
 
